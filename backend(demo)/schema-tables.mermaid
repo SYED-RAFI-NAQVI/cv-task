@@ -1,0 +1,61 @@
+erDiagram
+    organizations {
+        uuid id PK
+        string name
+        string slug
+        string email
+        string status
+        timestamp created_at
+    }
+    
+    users {
+        uuid id PK
+        uuid organization_id FK
+        string email
+        string name
+        string role
+        string password_hash
+        boolean is_active
+        timestamp created_at
+    }
+    
+    jobs {
+        uuid id PK
+        uuid organization_id FK
+        uuid created_by FK
+        string title
+        text description
+        string status
+        timestamp created_at
+    }
+    
+    candidates {
+        uuid id PK
+        uuid job_id FK
+        uuid organization_id FK
+        string name
+        string email
+        string phone
+        string cv_file_url
+        timestamp created_at
+    }
+    
+    cv_analyses {
+        uuid id PK
+        uuid candidate_id FK
+        uuid organization_id FK
+        integer match_score
+        text summary
+        json key_strengths
+        json technical_skills
+        string recommendation
+        timestamp created_at
+    }
+    
+    organizations ||--o{ users : "has"
+    organizations ||--o{ jobs : "creates"
+    organizations ||--o{ candidates : "owns"
+    organizations ||--o{ cv_analyses : "owns"
+    users ||--o{ jobs : "creates"
+    jobs ||--o{ candidates : "has"
+    candidates ||--|| cv_analyses : "analyzed"
