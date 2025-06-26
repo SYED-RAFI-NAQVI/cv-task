@@ -1,36 +1,72 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# AI CV Screening Platform
 
-## Getting Started
+## What We Vibe Coded Together 🚀
 
-First, run the development server:
+Built an AI-powered CV screening app that automatically analyzes and ranks job candidates. Started with a frontend idea and ended up with a full recruitment platform!
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+## The Journey
+
+**Started with**: Basic Next.js app concept  
+**Ended with**: Complete AI recruitment tool with drag-and-drop, scoring, and recommendations
+
+### What We Built
+
+- **Clean UI**: Modern React interface with Tailwind + shadcn/ui
+- **Smart Upload**: Drag-and-drop for PDF resumes (fixed the button click issue too!)
+- **AI Brain**: Google Gemini + FAISS vector search for candidate matching
+- **Real Results**: Match scores, skill extraction, interview recommendations
+- **Sample Data**: 5 full-stack dev resumes + "Load Sample Data" button
+
+### The Tech Vibes
+
+```
+Frontend: Next.js 14 + TypeScript + Tailwind
+Backend: Next.js API routes (/api/process-cvs)
+AI Magic: Google Gemini + Langchain + FAISS
+UI: shadcn/ui components
+Files: PDF parsing and analysis
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Quick Run
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```bash
+cd cv-task
+npm install
+npm run dev
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Hit http://localhost:3000 → Click "Load Sample Data" → See the magic!
 
-## Learn More
+## The Flow
 
-To learn more about Next.js, take a look at the following resources:
+1. Upload job description + CV PDFs
+2. AI analyzes everything (with a cool progress bar)
+3. Get ranked candidates with scores and insights
+4. Make hiring decisions faster
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## What We Figured Out
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+- How to integrate multiple AI services seamlessly
+- Building intuitive file upload with proper error handling
+- Creating a scoring system that actually makes sense
+- Making the UI feel professional but not boring
+- Structuring a full-stack app that could scale
 
-## Deploy on Vercel
+## Files We Touched
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+```
+cv-task/           # Complete Next.js app (frontend + API routes)
+  ├── src/app/api/ # Backend API routes for CV processing
+  └── src/app/     # Frontend pages and components
+backend(demo)/     # Reference: example schema, migrations, seed data
+public/cvs/        # Sample PDFs we added
+```
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Backend Implementation
+
+**Current**: Built with Next.js API routes (`/api/process-cvs`) - everything integrated in one app  
+**Demo Folder**: `backend(demo)/` contains example schema, migrations, seed data for reference
+
+We used Next.js server-side functionality for this task. Could build a separate backend with dedicated APIs, but Next.js API routes handled everything we needed for the CV processing workflow.
+
+**Result**: A complete full-stack AI recruitment tool built entirely with Next.js. Frontend + backend + AI - all in one! ✨
