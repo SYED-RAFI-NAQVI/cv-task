@@ -1,444 +1,208 @@
-// src/app/api/process-cvs/route.ts
+// src/app/api/process-cvs/route.js
 import { NextRequest, NextResponse } from "next/server";
-import {
-  ChatGoogleGenerativeAI,
-  GoogleGenerativeAIEmbeddings,
-} from "@langchain/google-genai";
+import { ChatGoogleGenerativeAI } from "@langchain/google-genai";
 
+// Initialize the Gemini AI model
 const llm = new ChatGoogleGenerativeAI({
   model: "gemini-2.0-flash",
   temperature: 0.2,
   apiKey: process.env.GOOGLE_API_KEY,
+  maxOutputTokens: 2048,
 });
 
-const embeddings = new GoogleGenerativeAIEmbeddings({
-  model: "embedding-004",
-  apiKey: process.env.GOOGLE_API_KEY,
-});
-
+// Clean JSON response helper
 function cleanJSONResponse(content) {
   try {
     let cleanContent = content.trim();
     if (cleanContent.startsWith("```json")) {
-      cleanContent = cleanContent
-        .replace(/^```json\s*/, "")
-        .replace(/\s*```$/, "");
-    } else if (cleanContent.startsWith("```")) {
-      cleanContent = cleanContent.replace(/^```\s*/, "").replace(/\s*```$/, "");
+      cleanContent = cleanContent.replace(/```json\s*|\s*```/g, "");
+    } else if (cleanContent.startsWith("{")) {
+      // Already JSON-like, remove any trailing markdown backticks
+      cleanContent = cleanContent.replace(/\s*```\s*$/g, "");
     }
 
-    const jsonStart = cleanContent.indexOf("{");
-    const jsonEnd = cleanContent.lastIndexOf("}");
-
-    if (jsonStart !== -1 && jsonEnd !== -1) {
-      cleanContent = cleanContent.substring(jsonStart, jsonEnd + 1);
-    }
-
+    // Parse the JSON string into an object
     return JSON.parse(cleanContent);
   } catch (error) {
-    console.error("JSON parsing error:", error);
-    throw new Error("Invalid JSON response from AI");
+    console.error("Error cleaning JSON response:", error);
+    throw new Error(`Invalid JSON response: ${error.message}`);
   }
 }
 
-function cosineSimilarity(vecA, vecB) {
-  const dotProduct = vecA.reduce((sum, a, i) => sum + a * vecB[i], 0);
-  const magnitudeA = Math.sqrt(vecA.reduce((sum, a) => sum + a * a, 0));
-  const magnitudeB = Math.sqrt(vecB.reduce((sum, b) => sum + b * b, 0));
-
-  if (magnitudeA === 0 || magnitudeB === 0) return 0;
-  return dotProduct / (magnitudeA * magnitudeB);
-}
-
-async function extractTextFromPDF(buffer, fileName) {
-  try {
-    const uint8Array = new Uint8Array(buffer);
-    let text = "";
-    for (let i = 0; i < uint8Array.length - 1; i++) {
-      const char = uint8Array[i];
-
-      if (char >= 32 && char <= 126) {
-        text += String.fromCharCode(char);
-      } else if (char === 10 || char === 13) {
-        text += " ";
-      }
-    }
-
-    text = text
-      .replace(/[^\w\s@.\-()]/g, " ")
-      .replace(/\s+/g, " ")
-      .trim();
-
-    if (text.length > 100) {
-      return text.substring(0, 5000);
-    }
-
-    return `CV for ${fileName
-      .replace(/\.[^/.]+$/, "")
-      .replace(
-        /[-_*]/g,
-        " "
-      )}. Advanced text extraction required for full content.`;
-  } catch (error) {
-    console.error("Error extracting PDF text:", error);
-    return `CV document: ${fileName}. Text extraction failed - please ensure file is a valid PDF.`;
-  }
-}
-
-async function extractCandidateDataWithAI(cvText, fileName) {
-  const extractionPrompt = `
-You are an AI agent specialized in extracting structured data from CV/resume text. 
-
-CV TEXT:
-${cvText.substring(0, 3000)}
-
-FILENAME: ${fileName}
-
-Extract the following information and return ONLY a valid JSON object (no markdown, no extra text):
-{
-  "name": "candidate full name",
-  "email": "email address if found or empty string",
-  "phone": "phone number if found or empty string", 
-  "currentTitle": "current or most recent job title",
-  "experience": "years of experience or experience level",
-  "location": "location/city if mentioned or empty string",
-  "skills": ["skill1", "skill2", "skill3"],
-  "education": "highest education degree",
-  "summary": "brief 1-2 sentence professional summary"
-}
-
-Rules:
-- Return ONLY the JSON object, nothing else
-- If information is not found, use empty string "" for text fields or empty array [] for skills
-- For name, if not clearly found, derive from filename
-- Extract 3-8 most relevant technical skills
-- Be accurate and don't make up information
-
-RESPONSE (JSON only):`;
-
-  try {
-    const response = await llm.invoke(extractionPrompt);
-    const extractedData = cleanJSONResponse(response.content);
-
-    if (!extractedData.name) {
-      extractedData.name = fileName
-        .replace(/\.[^/.]+$/, "")
-        .replace(/[-_*]/g, " ");
-    }
-
-    return extractedData;
-  } catch (error) {
-    console.error("Error in AI extraction:", error);
-
-    return {
-      name: fileName.replace(/\.[^/.]+$/, "").replace(/[-_*]/g, " "),
-      email: "",
-      phone: "",
-      currentTitle: "",
-      experience: "Not specified",
-      location: "",
-      skills: [],
-      education: "",
-      summary: "CV data extraction failed - manual review required",
-    };
-  }
-}
-
-async function calculateSemanticSimilarity(jobDescription, candidateTexts) {
-  try {
-    console.log("🔍 Generating embeddings for semantic similarity...");
-    const jobEmbedding = await embeddings.embedQuery(jobDescription);
-
-    const candidateEmbeddings = await Promise.all(
-      candidateTexts.map((text) =>
-        embeddings.embedQuery(text.substring(0, 2000))
-      )
-    );
-
-    const similarities = candidateEmbeddings.map((candidateEmb) =>
-      cosineSimilarity(jobEmbedding, candidateEmb)
-    );
-
-    return similarities;
-  } catch (error) {
-    console.error("Error calculating semantic similarity:", error);
-    return candidateTexts.map(() => 0.5);
-  }
-}
-async function generateAIMatchingAnalysis(
-  candidateData,
-  cvText,
-  jobTitle,
-  jobDescription,
-  similarityScore
-) {
-  const analysisPrompt = `
-You are an expert AI recruitment agent. Analyze how well this candidate matches the job requirements.
-
-JOB TITLE: ${jobTitle}
-
-JOB DESCRIPTION & REQUIREMENTS:
-${jobDescription}
-
-CANDIDATE PROFILE:
-Name: ${candidateData.name}
-Current Title: ${candidateData.currentTitle}
-Experience: ${candidateData.experience}
-Skills: ${candidateData.skills.join(", ")}
-Education: ${candidateData.education}
-Summary: ${candidateData.summary}
-
-SEMANTIC SIMILARITY SCORE: ${Math.round(similarityScore * 100)}%
-
-CV TEXT EXCERPT:
-${cvText.substring(0, 1500)}
-
-Analyze this candidate and provide ONLY a JSON response (no markdown, no extra text):
-{
-  "matchScore": 85,
-  "summary": "professional 2-3 sentence assessment of candidate fit",
-  "keyStrengths": ["strength1", "strength2", "strength3"],
-  "potentialConcerns": ["concern1", "concern2"],
-  "recommendation": "interview",
-  "technicalSkills": ["relevant skill1", "relevant skill2"],
-  "experienceLevel": "senior",
-  "culturalFit": "high",
-  "reasoningExplanation": "explanation for score and recommendation"
-}
-
-Scoring Guidelines:
-- 90-100: Exceptional match, rare find
-- 80-89: Strong match, should interview  
-- 70-79: Good potential, worth considering
-- 60-69: Some fit, needs careful review
-- Below 60: Poor fit for this role
-
-Recommendation options: "interview", "consider", "review", "reject"
-Experience levels: "junior", "mid", "senior", "lead"
-Cultural fit: "high", "medium", "low"
-
-RESPONSE (JSON only):`;
-
-  try {
-    const response = await llm.invoke(analysisPrompt);
-    const analysis = cleanJSONResponse(response.content);
-
-    analysis.matchScore = Math.min(
-      Math.max(parseInt(analysis.matchScore) || 0, 0),
-      100
-    );
-
-    analysis.keyStrengths = analysis.keyStrengths || [
-      "Professional background",
-    ];
-    analysis.potentialConcerns = analysis.potentialConcerns || [];
-    analysis.technicalSkills =
-      analysis.technicalSkills || candidateData.skills.slice(0, 3);
-
-    return analysis;
-  } catch (error) {
-    console.error("Error in AI analysis:", error);
-
-    const fallbackScore = Math.min(Math.round(similarityScore * 75 + 25), 100);
-    return {
-      matchScore: fallbackScore,
-      summary: `Candidate shows ${
-        fallbackScore >= 70 ? "good" : "moderate"
-      } alignment with job requirements based on semantic analysis.`,
-      keyStrengths: ["Professional background", "Relevant experience"],
-      potentialConcerns: fallbackScore < 70 ? ["Requires detailed review"] : [],
-      recommendation:
-        fallbackScore >= 80
-          ? "consider"
-          : fallbackScore >= 60
-          ? "review"
-          : "reject",
-      technicalSkills: candidateData.skills.slice(0, 3),
-      experienceLevel: "unknown",
-      culturalFit: "medium",
-      reasoningExplanation:
-        "Analysis based on semantic similarity and available CV data",
-    };
-  }
-}
-
+// Main API endpoint
 export async function POST(request) {
   try {
     console.log("🤖 Starting AI-powered CV analysis...");
-    if (!process.env.GOOGLE_API_KEY) {
-      return NextResponse.json(
-        {
-          error:
-            "Google API key not configured. Please add GOOGLE_API_KEY to your .env.local file.",
-        },
-        { status: 500 }
-      );
-    }
 
-    const data = await request.formData();
-    const jobTitle = data.get("jobTitle");
-    const jobDescription = data.get("jobDescription");
-    const files = data.getAll("files");
-
-    if (!jobTitle || !jobDescription || !files || files.length === 0) {
-      return NextResponse.json(
-        {
-          error: "Missing required fields: jobTitle, jobDescription, or files",
-        },
-        { status: 400 }
-      );
-    }
+    // Get form data from request
+    const formData = await request.formData();
+    const files = formData.getAll("files");
+    const jobTitle = formData.get("jobTitle");
+    const jobDescription = formData.get("jobDescription");
 
     console.log(`📊 Processing ${files.length} CVs for: ${jobTitle}`);
 
-    const candidatesData = [];
-    const candidateTexts = [];
-
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i];
-
-      if (file.type !== "application/pdf") {
-        console.warn(`⚠️ Skipping non-PDF file: ${file.name}`);
-        continue;
-      }
-
-      try {
-        console.log(`🔍 Processing CV ${i + 1}/${files.length}: ${file.name}`);
-
-        const buffer = await file.arrayBuffer();
-        const cvText = await extractTextFromPDF(buffer, file.name);
-
-        if (!cvText || cvText.length < 30) {
-          console.warn(`⚠️ Insufficient text extracted from ${file.name}`);
-          continue;
-        }
-
-        console.log(`🧠 AI extracting candidate data from ${file.name}...`);
-        const candidateData = await extractCandidateDataWithAI(
-          cvText,
-          file.name
+    // Prepare data for each CV
+    const cvData = await Promise.all(
+      files.map(async (file, index) => {
+        const fileName = file.name;
+        console.log(
+          `📂 Preparing CV ${index + 1}/${files.length}: ${fileName}`
         );
 
-        candidatesData.push({
-          ...candidateData,
-          fileName: file.name,
-          cvText,
-          index: i,
-        });
+        const arrayBuffer = await file.arrayBuffer();
+        const buffer = Buffer.from(arrayBuffer);
+        const base64PDF = buffer.toString("base64");
 
-        candidateTexts.push(cvText);
-      } catch (error) {
-        console.error(`❌ Error processing ${file.name}:`, error);
-        continue;
-      }
-    }
+        // Extract name from filename for fallback
+        const nameFromFilename = fileName
+          .replace(".pdf", "")
+          .replace(/-/g, " ")
+          .replace(/\b\w/g, (c) => c.toUpperCase()); // Capitalize words
 
-    if (candidatesData.length === 0) {
-      return NextResponse.json(
-        {
-          error:
-            "No valid CV files could be processed. Please ensure files are valid PDFs.",
-        },
-        { status: 400 }
-      );
-    }
-
-    console.log(`✅ Successfully processed ${candidatesData.length} CVs`);
-
-    console.log("📈 Calculating semantic similarity scores...");
-    const similarityScores = await calculateSemanticSimilarity(
-      `${jobTitle}\n${jobDescription}`,
-      candidateTexts
+        return {
+          fileName,
+          base64PDF, // Send full PDF data without truncation
+          nameFromFilename,
+        };
+      })
     );
 
-    console.log("🤖 Running AI matching analysis...");
-    const results = [];
+    console.log("🧠 Sending CVs to Gemini for analysis...");
 
-    for (let i = 0; i < candidatesData.length; i++) {
-      const candidate = candidatesData[i];
-      const similarityScore = similarityScores[i] || 0;
+    // Make a single call to Gemini API with all CVs
+    const response = await llm.invoke(`
+      You are an expert AI recruitment agent. I'll provide you with a job description and ${
+        files.length
+      } candidate resumes in base64 format.
+      Your task is to analyze each resume, extract key information, and rank candidates by suitability.
+      
+      JOB TITLE: ${jobTitle}
+      
+      JOB DESCRIPTION:
+      ${jobDescription}
+      
+      ${cvData
+        .map(
+          (cv, index) => `
+      CANDIDATE ${index + 1}:
+      Filename: ${cv.fileName}
+      Name (if not found in resume): ${cv.nameFromFilename}
+      Base64 PDF: ${cv.base64PDF}
+      ---
+      `
+        )
+        .join("\n")}
+      
+      For each candidate, analyze their resume and provide:
+      1. Name (from resume or use provided filename-based name)
+      2. Current job title
+      3. Years of experience
+      4. Experience level (junior/mid/senior)
+      5. Technical skills list
+      6. Education
+      7. Match score (0-100)
+      8. Recommendation (interview/consider/review/reject)
+      9. 2-3 key strengths relevant to the role
+      10. 2-3 areas to probe further or concerns
+      11. Brief summary of fit
+      
+      Order candidates by match score (highest first).
+      
+      Also calculate:
+      - Highest score among all candidates
+      - Average score
+      - Number of candidates recommended for interview or consideration
+      
+      Return your analysis as a JSON object with this format:
+      {
+        "results": [
+          {
+            "id": 1,
+            "fileName": "filename.pdf",
+            "name": "Candidate Name",
+            "experience": "Years of experience",
+            "currentTitle": "Job title",
+            "matchScore": 85,
+            "summary": "Brief assessment",
+            "keyStrengths": ["Strength 1", "Strength 2"],
+            "potentialConcerns": ["Concern 1", "Concern 2"],
+            "recommendation": "interview",
+            "technicalSkills": ["Skill 1", "Skill 2"],
+            "experienceLevel": "mid",
+            "similarityScore": 0.75
+          }
+          // More candidates...
+        ],
+        "summary": {
+          "topScore": 85,
+          "averageScore": 70,
+          "recommendedCandidates": 3
+        }
+      }
+      
+      Respond with ONLY the JSON object, no explanations or formatting.
+    `);
 
-      console.log(
-        `🔍 AI analyzing candidate ${i + 1}/${candidatesData.length}: ${
-          candidate.name
-        }`
-      );
+    // Parse the response
+    const analysisData = cleanJSONResponse(response.content);
 
-      const analysis = await generateAIMatchingAnalysis(
-        candidate,
-        candidate.cvText,
-        jobTitle,
-        jobDescription,
-        similarityScore
-      );
-
-      results.push({
-        id: i + 1,
-        name: candidate.name,
-        email: candidate.email,
-        phone: candidate.phone,
-        fileName: candidate.fileName,
-        experience: candidate.experience,
-        currentTitle: candidate.currentTitle,
-        location: candidate.location,
-        education: candidate.education,
-        matchScore: analysis.matchScore,
-        summary: analysis.summary,
-        keyStrengths: analysis.keyStrengths,
-        potentialConcerns: analysis.potentialConcerns,
-        recommendation: analysis.recommendation,
-        technicalSkills: analysis.technicalSkills,
-        experienceLevel: analysis.experienceLevel,
-        culturalFit: analysis.culturalFit,
-        reasoningExplanation: analysis.reasoningExplanation,
-        similarityScore: Math.round(similarityScore * 100),
-        processedAt: new Date().toISOString(),
-      });
+    // Validate response structure
+    if (!analysisData.results || !Array.isArray(analysisData.results)) {
+      throw new Error("Invalid response format from AI");
     }
 
-    results.sort((a, b) => b.matchScore - a.matchScore);
+    // Ensure proper filename mapping
+    const finalResults = analysisData.results.map((result, index) => {
+      // Make sure each result has the correct filename from original CVs
+      if (index < cvData.length) {
+        result.fileName = cvData[index].fileName;
+      }
+      return result;
+    });
 
     console.log("🎉 AI CV analysis completed successfully!");
 
-    return NextResponse.json({
-      success: true,
-      jobTitle,
-      results,
-      totalCandidates: results.length,
-      processedAt: new Date().toISOString(),
-      summary: {
-        topScore: results[0]?.matchScore || 0,
-        averageScore: Math.round(
-          results.reduce((sum, r) => sum + r.matchScore, 0) / results.length
-        ),
-        recommendedCandidates: results.filter(
-          (r) => r.recommendation === "interview"
-        ).length,
-        aiProcessingNote: "All analysis powered by Google Gemini AI agents",
-      },
-    });
-  } catch (error) {
-    console.error("❌ Error in AI CV processing:", error);
-
+    // Return the formatted response
     return NextResponse.json(
       {
-        error: "AI processing failed",
-        message:
-          error instanceof Error ? error.message : "Unknown error occurred",
-        success: false,
+        success: true,
+        jobTitle,
+        results: finalResults,
+        totalCandidates: finalResults.length,
+        processedAt: new Date().toISOString(),
+        summary: analysisData.summary || {
+          topScore: Math.max(...finalResults.map((r) => r.matchScore || 0), 0),
+          averageScore: finalResults.length
+            ? finalResults.reduce((sum, r) => sum + (r.matchScore || 0), 0) /
+              finalResults.length
+            : 0,
+          recommendedCandidates: finalResults.filter(
+            (r) =>
+              r.recommendation === "interview" ||
+              r.recommendation === "consider"
+          ).length,
+        },
       },
-      { status: 500 }
+      {
+        status: 200,
+        headers: {
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Methods": "POST, OPTIONS",
+          "Access-Control-Allow-Headers": "Content-Type",
+        },
+      }
+    );
+  } catch (error) {
+    console.error("❌ Error processing CVs:", error);
+    return NextResponse.json(
+      {
+        success: false,
+        error: error.message || "Error processing CVs",
+      },
+      {
+        status: 500,
+      }
     );
   }
-}
-
-export async function OPTIONS() {
-  return new NextResponse(null, {
-    status: 200,
-    headers: {
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Methods": "POST, OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type",
-    },
-  });
 }
